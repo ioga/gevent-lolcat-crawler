@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test site root</title>
+</head>
+<body>
+<h1>Test site root page</h1>
+<ol>
+    <li><a href="page1.xhtml">just xhtml page</a></li>
+    <li>
+        <ul>
+            <li><a href="/dir1/page1.html">Absolute path</a></li>
+            <li><a href="dir1/page2.html">Relative path</a></li>
+        </ul>
+    </li>
+    <li>
+        <ol>
+            <li><a href="/cats/cat1.jpg">JPEG Cat</a></li>
+            <li><a href="cats/cat2.png">Relative PNG Cat</a></li>
+            <li><img src="dir1/../cats/cat3.gif" alt="Nasty gif cat it img tag"/></li>
+        </ol>
+    </li>
+</ol>
+</body>
+</html>
