@@ -27,12 +27,12 @@ class HTMLLinkExtractor(HTMLParser):
         self.queue = queue
 
     def handle_starttag(self, tag, attrs):
-        try: self._add_link(dict(attrs)[{ 'a': 'href', 'img': 'src', }[tag]])
+        try: self._add_link(dict(attrs)[{ 'a': 'href', 'img': 'src' }[tag]])
         except KeyError: pass
 
     def _add_link(self, ref_url):
-        new_url = urljoin(self.url, ref_url)
-        log.info('Adding to queue: {0}'.format(new_url))
+        new_url = urljoin(self.url, ref_url).split('#')[0]
+        log.debug('Adding to queue: {0}'.format(new_url))
         self.queue.put(new_url)
 
     def reset(self):
@@ -40,51 +40,10 @@ class HTMLLinkExtractor(HTMLParser):
 
     def extract_links(self):
         self.reset()
-        self.feed(urlopen(self.url).read())
+        self.feed(self._read())
 
-def isimage(url):
-    guess = mimetypes.guess_type(url)[0]
-    return guess.startswith('image') if guess else False
-
-def fetch_page(url, q):
-    try:
-        HTMLLinkExtractor(url, q).extract_links()
-        log.info('Parsed page: {0}'.format(url))
-    except (HTMLParseError, URLError), ex:
-        log.exception(ex)
-
-def fetch_image(url, tmpdir, bufsize=8192):
-    filepath = os.path.join(tmpdir, os.path.basename(url))
-    try:
-        with open(filepath, 'wb') as f:
-            for chunk in urlopen(url).read(bufsize):
-                f.write(chunk)
-        log.info('Fetched image: {0}'.format(filepath))
-    except (URLError, IOError), ex:
-        log.exception(ex)
-        try: # Remove unfinished file
-            os.unlink(filepath)
-        except (IOError, OSError), ex:
-            log.exception(ex)
-
-def crawler(start_url, concurrency, tmpdir):
-    hostname = urlsplit(start_url).hostname
-    pool = gevent.pool.Pool(concurrency)
-    q = gevent.queue.Queue()
-    visited = set()
-    q.put(start_url)
-    while not q.empty() or pool.free_count() != concurrency:
-        try: url = q.get(timeout=0.5)
-        except gevent.queue.Empty:
-            log.info('Queue is empty')
-            continue
-        if url not in visited and hostname in url:
-            visited.add(url)
-            if isimage(url):
-                pool.spawn(fetch_image, url, tmpdir)
-            else:
-                pool.spawn(fetch_page, url, q)
-    pool.join()
+    def _read(self):
+        return urlopen(self.url).read().decode('ascii', 'ignore')
 
 class PageFetcher(Greenlet):
     def __init__(self, url, queue):
@@ -156,8 +115,11 @@ class Crawler(object):
         return guess.startswith('image') if guess else False
 
 def test():
+    import filecmp
+    import shutil
+
     # Mock urlopen
-    def my_urlopen(url):
+    def mocked_urlopen(url):
         url_path = urlsplit(url).path.lstrip('/')
         real_path = os.path.join('test_site', url_path)
         if os.path.isdir(real_path):
@@ -167,11 +129,12 @@ def test():
         else:
             raise IOError('Error 404: Not Found')
     global urlopen
-    urlopen = my_urlopen
+    urlopen = mocked_urlopen
 
-    # Clean all files from target directory
-    for file in os.listdir(TMPDIR):
-        os.unlink(os.path.join(TMPDIR, file))
+    # Clean target directory
+    if os.path.exists(TMPDIR):
+        shutil.rmtree(TMPDIR)
+    os.mkdir(TMPDIR)
 
     timeout = Timeout(15)
     try:
@@ -182,19 +145,16 @@ def test():
     finally:
         timeout.cancel()
 
-    import filecmp
+    # Compare dirs
     dcmp = filecmp.dircmp('test_site/cats', TMPDIR)
     same = set(dcmp.same_files)
     for file in dcmp.left_list:
         if file not in same:
-            sys.exit('Test failed. Cat file {0} is absent or differs in target directory'.format(file))
+            sys.exit('Test failed. Cat file {0} is absent or differs'.format(file))
 
     print 'Test OK.'
 
 def main():
-    #test()
-    #return
-    #crawler('http://halibut.su', 5, '')
     parser = argparse.ArgumentParser(description='Recursively crawls target site and fetches all images into target directory')
     parser.add_argument('url', metavar='URL', nargs='?')
     parser.add_argument('-d', metavar='DIR', help='Target directory, defaults to {0}'.format(TMPDIR), default=TMPDIR)
@@ -206,8 +166,10 @@ def main():
         test()
         return
 
-    if not os.path.isdir(args.d):
-        sys.exit("Target directory doesn't exists")
+    if not os.path.exists(args.d):
+        os.mkdir(args.d)
+    elif not os.path.isdir(args.d):
+        sys.exit("Target exists and is not directory")
 
     if not args.url:
         parser.print_help()
