@@ -12,13 +12,14 @@ from urlparse import urlsplit, urljoin
 from HTMLParser import HTMLParser, HTMLParseError
 import mimetypes
 import argparse
+from uuid import uuid4
 
 import logging
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger()
 
 TMPDIR = 'tmpdir'
-JOBS = 5
+JOBS = 10
 
 class HTMLLinkExtractor(HTMLParser):
     def __init__(self, url, queue):
@@ -69,20 +70,30 @@ class ImageFetcher(Greenlet):
 
     def _run(self):
         url, dir, bs = self.url, self.dir, self.bufsize
-        with Timeout(10):
-            filepath = os.path.join(dir, os.path.basename(url))
-            try:
-                with open(filepath, 'wb') as f:
-                    for chunk in urlopen(url).read(bs):
-                        f.write(chunk)
-                log.info('Fetched image: {0}'.format(filepath))
-            except (URLError, IOError), ex:
-                log.error('Exception on url: {0}'.format(self.url))
+        timeout = Timeout(10)
+        filepath = os.path.join(dir, os.path.basename(url))
+        while os.path.exists(filepath):
+            # Try to generate some unique filename
+            parts = filepath.split('.')
+            extension = parts.pop()
+            parts.append(unicode(uuid4())[:8])
+            parts.append(extension)
+            filepath = '.'.join(parts)
+        try:
+            timeout.start()
+            with open(filepath, 'wb') as f:
+                for chunk in urlopen(url).read(bs):
+                    f.write(chunk)
+            log.info('Fetched image: {0}'.format(filepath))
+        except (Timeout, URLError, IOError), ex:
+            log.error('Exception on url: {0}'.format(self.url))
+            log.exception(ex)
+            try: # Remove unfinished file
+                os.unlink(filepath)
+            except (IOError, OSError), ex:
                 log.exception(ex)
-                try: # Remove unfinished file
-                    os.unlink(filepath)
-                except (IOError, OSError), ex:
-                    log.exception(ex)
+        finally:
+            timeout.cancel()
 
 class Crawler(object):
     def __init__(self, start_url, concurrency, target_dir):
@@ -120,7 +131,11 @@ def test():
 
     # Mock urlopen
     def mocked_urlopen(url):
-        url_path = urlsplit(url).path.lstrip('/')
+        usplit = urlsplit(url)
+        if 'test_site' not in  usplit.hostname:
+            sys.exit('Crawler tried to visit external host')
+
+        url_path = usplit.path.lstrip('/')
         real_path = os.path.join('test_site', url_path)
         if os.path.isdir(real_path):
             real_path = os.path.join(real_path, 'index.html')
@@ -146,11 +161,9 @@ def test():
         timeout.cancel()
 
     # Compare dirs
-    dcmp = filecmp.dircmp('test_site/cats', TMPDIR)
-    same = set(dcmp.same_files)
-    for file in dcmp.left_list:
-        if file not in same:
-            sys.exit('Test failed. Cat file {0} is absent or differs'.format(file))
+    # Not very accurate measure
+    if len(os.listdir('test_site/cats')) + len(os.listdir('test_site/cats2')) != len(os.listdir(TMPDIR)):
+        sys.exit('Test failed. Number of cats differs'.format(file))
 
     print 'Test OK.'
 
